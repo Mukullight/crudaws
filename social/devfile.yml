@@ -1,0 +1,196 @@
+schemaVersion: 2.2.0
+metadata:
+  name: cruddur-aws-bootcamp
+  description: AWS Bootcamp Cruddur 2023 development environment
+components:
+  # Universal Developer Image (UDI) as base container - includes Node.js, Python, Ruby, PostgreSQL client, etc.
+  - name: tools
+    container:
+      image: registry.redhat.io/devspaces/udi-rhel8:latest
+      memoryLimit: 2Gi
+      mountSources:
+        location: /projects
+        memory: false
+      env:
+        - name: AWS_CLI_AUTO_PROMPT
+          value: "on-partial"
+      endpoints:
+        - name: frontend
+          targetPort: 3000
+          attributes:
+            discoverable: "true"
+            public: "true"
+            openBrowser: "true"
+        - name: backend
+          targetPort: 4567
+          attributes:
+            discoverable: "true"
+            public: "true"
+        - name: xray-daemon
+          targetPort: 2000
+          attributes:
+            discoverable: "true"
+            public: "true"
+  # Additional container for specific tools if needed (e.g., for isolated installs)
+  - name: aws-tools
+    container:
+      image: registry.access.redhat.com/ubi8/ubi:latest
+      memoryLimit: 1Gi
+      command:
+        - /bin/bash
+        - -c
+        - |
+          # Install AWS CLI and SAM CLI in this container if not in UDI
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip awscliv2.zip
+          ./aws/install
+          rm -rf aws awscliv2.zip
+          # Install SAM CLI
+          cd /tmp
+          wget https://github.com/aws/aws-sam-cli/releases/latest/download/aws-sam-cli-linux-x86_64.zip
+          unzip aws-sam-cli-linux-x86_64.zip -d sam-installation
+          ./sam-installation/install
+          rm -rf aws-sam-cli-linux-x86_64.zip sam-installation
+          # Install other AWS tools: cfn-lint, cfn-guard, cfn-toml
+          pip install cfn-lint
+          cargo install cfn-guard
+          gem install cfn-toml
+          # Install Session Manager Plugin
+          curl "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/ubuntu_64bit/session-manager-plugin.deb" -o "session-manager-plugin.deb"
+          dpkg -i session-manager-plugin.deb
+          # Keep container running
+          tail -f /dev/null
+      endpoints: []
+      volumeMounts:
+        - name: projects
+          path: /projects
+  # Volume for shared projects
+  - name: projects
+    volume:
+      size: 10Gi
+      ephemeral: false
+commands:
+  # AWS SAM installation and setup
+  - id: aws-sam-setup
+    exec:
+      component: tools
+      workingDir: ${PROJECTS_ROOT}
+      commandLine: |
+        cd /tmp
+        wget https://github.com/aws/aws-sam-cli/releases/latest/download/aws-sam-cli-linux-x86_64.zip
+        unzip aws-sam-cli-linux-x86_64.zip -d sam-installation
+        ./sam-installation/install
+        rm -rf aws-sam-cli-linux-x86_64.zip sam-installation
+        cd ${PROJECTS_ROOT}
+  # CFN tools setup
+  - id: cfn-setup
+    exec:
+      component: tools
+      workingDir: ${PROJECTS_ROOT}
+      commandLine: |
+        bundle update --bundler
+        pip install cfn-lint
+        cargo install cfn-guard
+        gem install cfn-toml
+  # AWS CLI setup
+  - id: aws-cli-setup
+    exec:
+      component: tools
+      workingDir: ${PROJECTS_ROOT}
+      commandLine: |
+        cd /tmp
+        curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+        unzip -qo awscliv2.zip
+        ./aws/install
+        rm -rf aws awscliv2.zip
+        cd ${PROJECTS_ROOT}
+        # Source ECR login if exists
+        if [ -f "${PROJECTS_ROOT}/bin/ecr/login" ]; then
+          source "${PROJECTS_ROOT}/bin/ecr/login"
+        fi
+  # PostgreSQL setup
+  - id: postgres-setup
+    exec:
+      component: tools
+      workingDir: ${PROJECTS_ROOT}
+      commandLine: |
+        # UDI already has PostgreSQL client; if version-specific needed:
+        dnf install -y postgresql13
+        # Update SG rule script if exists
+        if [ -f "${PROJECTS_ROOT}/bin/rds/update-sg-rule" ]; then
+          GITPOD_IP=$(curl -s ifconfig.me)
+          export GITPOD_IP
+          source "${PROJECTS_ROOT}/bin/rds/update-sg-rule"
+        fi
+  # Flask backend setup
+  - id: flask-setup
+    exec:
+      component: tools
+      workingDir: ${PROJECTS_ROOT}
+      commandLine: |
+        if [ -f "${PROJECTS_ROOT}/bin/backend/generate-env" ]; then
+          ruby "${PROJECTS_ROOT}/bin/backend/generate-env"
+        fi
+        cd backend-flask
+        pip install -r requirements.txt
+  # React frontend setup
+  - id: react-setup
+    exec:
+      component: tools
+      workingDir: ${PROJECTS_ROOT}
+      commandLine: |
+        if [ -f "${PROJECTS_ROOT}/bin/frontend/generate-env" ]; then
+          ruby "${PROJECTS_ROOT}/bin/frontend/generate-env"
+        fi
+        cd frontend-react-js
+        npm install
+  # Fargate/Session Manager setup (already in aws-tools)
+  - id: fargate-setup
+    exec:
+      component: aws-tools
+      workingDir: ${PROJECTS_ROOT}
+      commandLine: |
+        cd backend-flask
+        # Any additional Fargate-specific setup
+  # CDK setup
+  - id: cdk-setup
+    exec:
+      component: tools
+      workingDir: ${PROJECTS_ROOT}
+      commandLine: |
+        npm install -g aws-cdk
+        cd thumbing-serverless-cdk
+        cp .env.example .env
+        npm install
+  # Default run command (e.g., start dev servers)
+  - id: run
+    parallel:
+      actions:
+        - id: start-frontend
+          exec:
+            component: tools
+            workingDir: ${PROJECTS_ROOT}/frontend-react-js
+            commandLine: "npm start"
+        - id: start-backend
+          exec:
+            component: tools
+            workingDir: ${PROJECTS_ROOT}/backend-flask
+            commandLine: "python app.py"  # Adjust based on actual start command
+events:
+  preStart:
+    - aws-cli-setup
+    - aws-sam-setup
+    - cfn-setup
+    - postgres-setup
+    - flask-setup
+    - react-setup
+    - fargate-setup
+    - cdk-setup
+starterProjects:
+  - name: cruddur
+    git:
+      remotes:
+        origin: "https://github.com/Mukullight/crudaws.git"  # Adjust to actual repo
+      checkoutFrom:
+        revision: main
+      clonePath: projects
