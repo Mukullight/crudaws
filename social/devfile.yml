@@ -1,7 +1,7 @@
 schemaVersion: 2.2.0
 metadata:
-  name: cruddur-aws-bootcamp
-  description: AWS Bootcamp Cruddur 2023 development environment
+  name: social
+  description: network platform for energy trading communication
 components:
   # Universal Developer Image (UDI) as base container - includes Node.js, Python, Ruby, PostgreSQL client, etc.
   - name: tools
